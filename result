@@ -1,977 +1,491 @@
+# machine learning--------
+ps0 = base::readRDS("./data/16s/ps_filter.rds")
+library(randomForest)
+library(caret)
+library(ROCR) ##用于计算ROC
+library(e1071)
 library(tidyverse)
-library(ggprism)
-library(ggsci)
-library(EasyStat)
-library(readxl)
-library(RColorBrewer)
-library(readxl)
+library(ggClusterNet)
+otu = otu_table(ps0)  %>% as.data.frame()
 
-#----- 数据读取----
-#---地图相关----
-worldmap <- sf::st_read('C:\\Users\\asus\\Desktop\\新知识\\大数据\\地图绘制/map_world_china//正确的世界地图/WorldMap.shp')
-worldmap 
-geo = read_xlsx("./data/数据.xlsx",sheet = 1)
-#geo = read.csv("C:\\Users\\asus\\Desktop\\新知识\\大数据\\地图绘制\\自己数据/123.CSV", header=T) 
-levels(geo$country)
-head(geo)
-#geo_xy = geo[,c("geo_yN","geo_xE","country","dis_plant","测序区域","seq_line")]
-geo_xy = geo[,c("geo_yN","geo_xE","country","seq_line","plant","SEQ_REGION","Year")]
-colnames(geo_xy)[5]="Plant"
-colnames(geo_xy)[6]="seq_zone"
-head(geo_xy)
+library(openxlsx)
+dat2 =  read.xlsx("./result_and_plot/Diversity_Micro/机器学习/建模剔除GENUS.xlsx")
+ps = filter_taxa(ps0, function(x) sum(x) > 0 , TRUE) 
+
+# 数据处理-----
+ps7 = tax_glom_wt(ps, "Genus")%>% subset_taxa(!Genus %in% dat2$id  ) 
+tax_table(ps7)  %>% row.names()
+# 转换相对丰度
+ps7  = transform_sample_counts(ps7, function(x) x / sum(x) );ps7
+otutab = as.data.frame(t(vegan_otu(ps7)))
+# 每一个属单独建模------
 
 
-#按照植物分组，但是我的样品只有三种
+microbes <- names(otutab_t)[-which(names(otutab_t) == "group")] 
 
-world2=sf::st_transform(worldmap ,"+proj=laea +y_0=0 +lon_0=120 +lat_0=30 +ellps=WGS84 +no_defs")
-# p = ggplot() + geom_sf(data = world2,aes( geometry = `geometry`,
-#                                         fill =  `ENG_NAME`),color= "grey30",fill="grey95")+
-#   ylab(label="")+xlab(label="")+
-#   theme_set(theme_bw())+
-#   geom_point(data=geo_xy,aes(x=geo_xE,y=geo_yN,color=Plant,shape =Plant ), 
-#              position = position_jitter(),
-#              size=1.5,alpha=.9)
-# 
-# p
-
-
-
-
-
-
-
-p = ggplot() + geom_sf(data = worldmap ,aes(geometry = `geometry`,
-                                           fill =  `ENG_NAME`),color= "grey35",fill="grey95")+
-  #geom_polygon(fill = "gray50", colour = "gray50", linetype = "dashed")+
-  # borders("world", colour = "gray35", fill = "gray95")+
-  ylab(label="")+xlab(label="")+
-  theme_set(theme_bw())+
-  geom_point(data=geo_xy,aes(x=geo_xE,y=geo_yN,color=Plant,shape =Plant ), 
-             position = position_jitter(),
-             size=2,alpha=.9)+
-  geom_hline(aes(yintercept =0), size=0.7, linetype="dashed", colour="gray49")+
-  geom_hline(aes(yintercept =60), size=0.7, linetype="dashed", colour="gray49")+
-  scale_color_gradientn(colours = rev(RColorBrewer::brewer.pal(11,"RdBu")))
-
-#添加样点
-p
-
-ggsave("./result_and_plot/地图/word_2.pdf", p, width = 12, height =8 )
-
-# 饼图
-opar <- par(no.readonly = TRUE)
-par(mfrow=c(2,2), mar=c(1,1,1,1),cex = 1)
-par(pin = c(2,2))
-
-##植物
-wt = as.data.frame(table(geo_xy$Plant))
-wt$Var1
-labs <- paste0(wt$Var1," \n(", round(wt$Freq/sum(wt$Freq)*100,2), "%)")
-
-p_植物= pie(wt$Freq,labels=labs, init.angle=90,col =  brewer.pal(nrow(wt), "Set3"),
-          border="black")
-
-ggsave("植物比例.pdf", p_植物, width = 12, height =8 , device = cairo_pdf, family = "Times New Roman")
-
-##国家
-wt = as.data.frame(table(geo_xy$country))
-wt$Var1
-
-labs <- paste0(wt$Var1," \n(", round(wt$Freq/sum(wt$Freq)*100,2), "%)")
-
-pie(wt$Freq,labels=labs, init.angle=90,col =  brewer.pal(nrow(wt), "Set3"),
-    border="black")
-
-##测序区域
-wt = as.data.frame(table(geo_xy$seq_zone))
-wt$Var1
-labs <- paste0(wt$Var1," \n(", round(wt$Freq/sum(wt$Freq)*100,2), "%)")
-
-pie(wt$Freq,labels=labs, init.angle=90,col =  brewer.pal(nrow(wt), "Set3"),
-    border="black")
-
-##测序平台
-wt = as.data.frame(table(geo_xy$seq_line))
-wt$Var1
-
-# levels(wt$Var1)[2]="454 GS FLX" 
-# 
-# levels(wt$Var1)[1]
-# levels(wt$Var1)[2]
-# levels(wt$Var1)[3]
-
-
-
-
-labs <- paste0(wt$Var1," \n(", round(wt$Freq/sum(wt$Freq)*100,2), "%)")
-
-pie(wt$Freq,labels=labs, init.angle=90,col =  brewer.pal(nrow(wt), "Set3"),
-    border="black")
-#par(opar)
-
-# 测序时间
-wt = as.data.frame(table(geo_xy$Year))
-wt$Var1
-labs <- paste0(wt$Var1," \n(", round(wt$Freq/sum(wt$Freq)*100,2), "%)")
-
-pie(wt$Freq,labels=labs, init.angle=90,col =  brewer.pal(nrow(wt), "Set3"),
-    border="black")
-
-
-
-
-
-
-# ----不同分类水平正确率-----
-?read_xlsx
-dat = read_xlsx("./data/数据.xlsx",sheet = 2)
-head(dat)
-
-display.brewer.pal(12,"Set1")
-brewer.pal(12,"Set1") 
-display.brewer.all() 
-mi = c("#D95F02","#B3DE69",)
-mi = c("#cc340c","#9ec417","#377EB8")
-
-
-dat$Group= as.character(dat$Group)
-
-p=ggplot(dat,aes(id,Accuracy_rate,group= Group))+
-  geom_point(aes(color=Group,fill="black"),size=3,show.legend = F)+
-  geom_line( aes(color= Group),size=1)+
-             scale_x_discrete(limits=c("Phylum","Class","Order","Family","Genus","OUT"))+
-   mytheme2+
-   theme_bw()+
-   theme(panel.grid.major = element_blank(),
-         panel.grid.minor = element_blank())+
-      scale_color_manual(values = mi)+
-   ylab("Accuracy rate(%)")+
-   xlab("")
-
-
-  scale_y_continuous(breaks = c(30,50,60,70,80,93.4))
- 
- 
- ggsave("./result_and_plot/Diversity_Micro/OTU_220817/Machine_learing/accrucy3.pdf",
-        p,width = 5,height = 3.5)
- 
-   scale_y_continuous(breaks = c(30,50,60,70,80,93.4))
-   
-   
- 
- 
- 
-   scale_colour_hue(l=45)
-   scale_fill_manual(values = mi)
-   
-   scale_color_brewer(palette = "Set1")
-   
+# 初始化结果数据框，用于存储每个属的指标
+result_df <- data.frame()
+# microbe  = "Ralstonia"
+# 遍历每个微生物属，进行单独建模
+for (microbe in microbes) {
+  # 为当前的微生物属创建一个子集数据框，只包含 group 和当前的微生物丰度
+  microbe_data <- otutab_t[, c("group", microbe)]
   
-ggsave("./result_and_plot/Diversity_Micro/OTU_220817/Machine_learing/accrucy.pdf",
-       p,width = 5,height = 3.5)
+  # 重命名列名为统一格式，方便后续代码一致性
+  colnames(microbe_data) <- c("group", "abundance")
+  
+  # 划分训练集和测试集
+  set.seed(123)  # 保证随机性一致
+  train_index <- createDataPartition(microbe_data$group, p = 0.7, list = FALSE)
+  train_data <- microbe_data[train_index, ]
+  test_data <- microbe_data[-train_index, ]
+  
+ 
+  temp_model <- randomForest(group ~ abundance, data = train_data, importance = TRUE, proximity = TRUE)
+  
+  oob_error <- temp_model$err.rate[nrow(temp_model$err.rate), "OOB"]
+  
+ 
+  predicted <- predict(temp_model, newdata = test_data, type = "response")
+  prob <- predict(temp_model, newdata = test_data, type = "prob")[, 2]  # 概率预测
+  
+ 
+  accuracy <- mean(predicted == test_data$group)
+  
+  
+  roc_obj <- roc(test_data$group, predicted_prob[, 2], levels = c("Disease", "Health"), direction = "<")
+  
+  
+  auc_value <- auc(roc_obj)
+  
+  # 计算混淆矩阵并提取指标
+  cm <- confusionMatrix(predicted, test_data$group)
+  recall <- cm$byClass["Recall"]
+  precision <- cm$byClass["Precision"]
+  f1_score <- cm$byClass["F1"]
+  
+  # 提取 Kappa 值
+  kappa_value <- cm$overall["Kappa"]
+  
+  # 将结果存储到数据框
+  result_df <- rbind(result_df, data.frame(
+    Microbe = microbe,
+    Accuracy = accuracy,
+    AUC = auc_value,
+    Recall = recall,
+    Precision = precision,
+    F1_Score = f1_score,
+    OOB_Error = oob_error,
+    Kappa = kappa_value
+    
+  ))
+}
+
+# 输出结果
+print(result_df)
+otu2_transposed
+
+otu2_transposed$ Microbe =  row.names(otu2_transposed)
+
+dat =  merge(otu2_transposed,result_df,by = "Microbe")
+
+dat 
+colnames(dat)
+
+
+# 按照权重排序
+weights <- c(Accuracy = 0.1, AUC = 0.3, Recall = 0.3, Precision = 0.1, F1_Score = 0.15, OOB_Error = 0.05, Kappa = 0.05)
+
+
+result_df <- dat %>%
+  mutate(Overall_Score = 
+           weights["Accuracy"] * Accuracy +
+           weights["AUC"] * AUC +
+           weights["Recall"] * Recall +
+           weights["Precision"] * Precision +
+           weights["F1_Score"] * F1_Score +
+           weights["OOB_Error"] * (1 - OOB_Error) +  # OOB_Error 越小越好，因此使用 (1 - OOB_Error)
+           weights["Kappa"] * Kappa) 
+
+
+# 按综合评分排序
+result_df <- result_df %>% arrange(desc(Overall_Score)) %>% select(Microbe,Overall_Score,everything())
 
 
 
+# 循环计算10次------
+
+# 初始化结果数据框
+result_df <- data.frame()
 
 
+microbes <- names(otutab_t)[-which(names(otutab_t) == "group")] 
 
 
-#----- 拮抗-----
-library(ggforce)
-# install.packages("jjAnno")
-# devtools::install_github("junjunlab/jjAnno")
-#library(jjAnno)
-library(ggplot2)
-#devtools::install_github("junjunlab/jjAnno")
-
-da = read_xlsx("./data/数据.xlsx",sheet = 6)
+# 重复 10 次实验
 
 
-da2= da[,2:13]
-# 数据宽边长
+for (i in 1:10) {
+  
+  for (microbe in microbes) {
+ 
+    microbe_data <- otutab_t[, c("group", microbe)]
+    
+   
+    colnames(microbe_data) <- c("group", "abundance")
+    
+    # 划分训练集和测试集
+    set.seed(i+1)  # 保证随机性一致
+    train_index <- createDataPartition(microbe_data$group, p = 0.7, list = FALSE)
+    train_data <- microbe_data[train_index, ]
+    test_data <- microbe_data[-train_index, ]
+    
+    # 构建随机森林模型
+    temp_model <- randomForest(group ~ abundance, data = train_data, importance = TRUE, proximity = TRUE)
+    # 计算OOB误差率
+    oob_error <- temp_model$err.rate[nrow(temp_model$err.rate), "OOB"]
+    
+    # 在测试集上进行预测
+    predicted <- predict(temp_model, newdata = test_data, type = "response")
+    prob <- predict(temp_model, newdata = test_data, type = "prob")[, 2]  # 概率预测
+    
+    # 计算指标：准确率、AUC、混淆矩阵指标（召回率、精确率、F1分数）
+    accuracy <- mean(predicted == test_data$group)
+    
+    # 计算 AUC
+    roc_obj <- roc(test_data$group, prob, levels = c("Disease", "Health"), direction = "<")
+    auc_value <- auc(roc_obj)
+    
+    # 计算混淆矩阵并提取指标
+    cm <- confusionMatrix(predicted, test_data$group)
+    recall <- cm$byClass["Recall"]
+    precision <- cm$byClass["Precision"]
+    f1_score <- cm$byClass["F1"]
+    
+    # 提取 Kappa 值
+    kappa_value <- cm$overall["Kappa"]
+    
+    # 将每次实验的结果暂时存储到 result_df 数据框
+    result_df <- rbind(result_df, data.frame(
+      Microbe = microbe,
+      Accuracy = accuracy,
+      AUC = auc_value,
+      Recall = recall,
+      Precision = precision,
+      F1_Score = f1_score,
+      OOB_Error = oob_error,
+      Kappa = kappa_value,
+      Run = i  # 标记当前重复次数
+    ))
+    
+  }
+}
+
+# 汇总每个微生物的均值和标准差
+summary_df <- result_df %>%
+  group_by(Microbe) %>%
+  summarise(
+    Accuracy_Mean = mean(Accuracy),
+    Accuracy_SD = sd(Accuracy),
+    AUC_Mean = mean(AUC),
+    AUC_SD = sd(AUC),
+    Recall_Mean = mean(Recall),
+    Recall_SD = sd(Recall),
+    Precision_Mean = mean(Precision),
+    Precision_SD = sd(Precision),
+    F1_Score_Mean = mean(F1_Score),
+    F1_Score_SD = sd(F1_Score),
+    OOB_Error_Mean = mean(OOB_Error),
+    OOB_Error_SD = sd(OOB_Error),
+    Kappa_Mean = mean(Kappa),
+    Kappa_SD = sd(Kappa)
+  )
+
+# 输出汇总结果
+print(summary_df)
 
 
-da3 = pivot_longer(da2,col=-ID2, names_to = "id", values_to = "abundance")
+summary_df[is.na(summary_df)]=0
 
-da3$ID2 <- factor(da3$ID2 ,levels = unique(da3$ID2 ))
-da3$id <- factor(da3$id ,levels = unique(da3$id ))
 
-da3 <- da3 %>% arrange(ID2)
+otu2_transposed$Microbe =  row.names(otu2_transposed)
 
-head(da3,15)
-table(da3$ID2)
+dat =  merge(otu2_transposed,summary_df,by = "Microbe")
+dat 
+colnames(dat)
 
-table(da3$id)
 
-# 增加绘图所需的坐标
-da3$x0 = rep(1:10,each=11)
-da3$y0 = rep(c(1:11),10)
-# "#44c1f0","#3f60aa"
+# 按照权重排序
+weights <- c(Accuracy_Mean = 0.1, AUC_Mean = 0.3, Recall_Mean = 0.3, Precision_Mean = 0.1, F1_Score_Mean = 0.15, OOB_Error_Mean = 0.05, Kappa_Mean = 0.05)
 
-da3$abundance[da3$abundance == 0] <- NA
 
-show_col(colset2)
-p = ggplot(da3,aes(ID2,id)) +
-  geom_point(aes(size = abundance,color= abundance,fill=abundance), shape = 17) +
-  #scale_size_continuous(range = c(0, 1)) +
-  scale_color_gradient(low = colset2[1], high = colset2[6], na.value = NA)  +
-  #scale_fill_gradient(low = colset2[8], high = colset2[5], na.value = NA)  +
-  # labs(x = "ID2", y = "id", size = "abundance", fill = "abundance") +
-  theme_bw(base_size = 16) +
-  xlab('') + ylab('') +
-  theme(axis.text.x = element_text(angle = 45,hjust = 1)) 
+result_df <- dat %>%
+  mutate(Overall_Score = 
+           weights["Accuracy_Mean"] * Accuracy_Mean +
+           weights["AUC_Mean"] * AUC_Mean +
+           weights["Recall_Mean"] * Recall_Mean +
+           weights["Precision_Mean"] * Precision_Mean +
+           weights["F1_Score_Mean"] * F1_Score_Mean +
+           weights["OOB_Error_Mean"] * (1 - OOB_Error_Mean) +  # OOB_Error 越小越好，因此使用 (1 - OOB_Error)
+           weights["Kappa_Mean"] * Kappa_Mean) 
 
-p
 
-# p = ggplot(da3,aes(ID2,id)) +
-#   scale_fill_gradient2(low = 'white',mid = '#44c1f0',high = '#3f60aa',
-#                        midpoint = 0.5,
-#                        name = 'Antagonistic activity') +
-#   theme_bw(base_size = 16) +
-#   xlab('') + ylab('') +
-#   theme(axis.text.x = element_text(angle = 45,hjust = 1)) +
-#   coord_fixed()
-# 
-# p
-# p = p + geom_regon(aes(x0 = x0,y0 = y0,
-#                    sides =3,
-#                    angle = 0,
-#                    # r = 0.5,
-#                    #r = scales::rescale(abundance,to = c(0,1)),
-#                    fill = abundance),
-#                # color = 'black'
-#                ) + theme_bw()+
-#   theme(axis.text.x=element_text(angle=30,hjust = 1,vjust = 1))
+# 按综合评分排序
+result_df <- result_df %>% arrange(desc(Overall_Score)) %>% select(Microbe,Overall_Score,everything())
+# 按照排序，依次叠加建模-------
+
+ord = read.csv("./result_and_plot/Diversity_Micro/机器学习/重复10次genus建模.csv") %>% na.omit()
+microbes <- ord $Microbe
+
+
+# 初始化结果数据框
+result_df <- data.frame()
+
+# 重复 10 次实验
+for (i in 1:10) {
+  # 设置随机种子以确保不同实验结果不同
+  set.seed(i)
+  
+  # 初始化一个空的特征集
+  current_features <- c()
+  
+  # 按顺序叠加微生物属
+  # j= 1
+  for (j in 1:length(microbes)) {
+    # 每次增加一个微生物
+    current_features <- c(current_features, microbes[j])
+    
+    # 创建数据子集：包含 group 和当前叠加的微生物属
+    microbe_data <- otutab_t[, c("group", current_features)]
+    
+    # 划分训练集和测试集
+    train_index <- createDataPartition(microbe_data$group, p = 0.7, list = FALSE)
+    train_data <- microbe_data[train_index, ]
+    test_data <- microbe_data[-train_index, ]
+    
+    # 构建随机森林模型
+    temp_model <- randomForest(group ~ ., data = train_data, importance = TRUE, proximity = TRUE)
+    
+    # 计算 OOB 误差率
+    oob_error <- temp_model$err.rate[nrow(temp_model$err.rate), "OOB"]
+    
+    # 在测试集上进行预测
+    predicted <- predict(temp_model, newdata = test_data, type = "response")
+    prob <- predict(temp_model, newdata = test_data, type = "prob")[, 2]  # 概率预测
+    
+    # 计算指标：准确率、AUC、混淆矩阵指标（召回率、精确率、F1分数）
+    accuracy <- mean(predicted == test_data$group)
+    
+    # 计算 AUC
+    roc_obj <- roc(test_data$group, prob, levels = c("Disease", "Health"), direction = "<")
+    auc_value <- auc(roc_obj)
+    
+    # 计算混淆矩阵并提取指标
+    cm <- confusionMatrix(predicted, test_data$group)
+    recall <- cm$byClass["Recall"]
+    precision <- cm$byClass["Precision"]
+    f1_score <- cm$byClass["F1"]
+    
+    # 提取 Kappa 值
+    kappa_value <- cm$overall["Kappa"]
+    
+    # 将每次实验的结果存储到 result_df 数据框
+    result_df <- rbind(result_df, data.frame(
+      Microbe_Count = j,  # 当前叠加的微生物数
+      Microbes = paste(current_features, collapse = ", "),  # 当前使用的微生物列表
+      Accuracy = accuracy,
+      AUC = auc_value,
+      Recall = recall,
+      Precision = precision,
+      F1_Score = f1_score,
+      OOB_Error = oob_error,
+      Kappa = kappa_value,
+      Run = i  # 标记当前重复次数
+    ))
+  }
+}
+
+
+# 汇总每个微生物组合的均值和标准差
+summary_df <- result_df %>%
+  group_by(Microbe_Count, Microbes) %>%
+  summarise(
+    Accuracy_Mean = mean(Accuracy),
+    Accuracy_SD = sd(Accuracy),
+    AUC_Mean = mean(AUC),
+    AUC_SD = sd(AUC),
+    Recall_Mean = mean(Recall),
+    Recall_SD = sd(Recall),
+    Precision_Mean = mean(Precision),
+    Precision_SD = sd(Precision),
+    F1_Score_Mean = mean(F1_Score),
+    F1_Score_SD = sd(F1_Score),
+    OOB_Error_Mean = mean(OOB_Error),
+    OOB_Error_SD = sd(OOB_Error),
+    Kappa_Mean = mean(Kappa),
+    Kappa_SD = sd(Kappa)
+  )
+
+# 输出汇总结果
+print(summary_df)
+
+# 按照权重排序
+
+weights <- c(Accuracy_Mean = 0.1, AUC_Mean = 0.3, Recall_Mean = 0.3, Precision_Mean = 0.1, F1_Score_Mean = 0.15, OOB_Error_Mean = 0.05, Kappa_Mean = 0.05,
+             Accuracy_SD = 0.1, AUC_SD = 0.3, Recall_SD = 0.3, Precision_SD = 0.1, F1_Score_SD = 0.15, OOB_Error_SD = 0.05, Kappa_SD = 0.05)
+
+# dat =  merge(otu2_transposed,summary_df,by = "Microbe")
+summary_df[is.na(summary_df)]=0
+
+
+result_df <- summary_df %>%
+  mutate(Overall_Score_SD = 
+           weights["Accuracy_SD"] * Accuracy_SD +
+           weights["AUC_SD"] * AUC_SD +
+           weights["Recall_SD"] * Recall_SD +
+           weights["Precision_SD"] * Precision_SD +
+           weights["F1_Score_SD"] * F1_Score_SD +
+           weights["OOB_Error_SD"] * (1 - OOB_Error_SD) +  # OOB_Error 越小越好，因此使用 (1 - OOB_Error)
+           weights["Kappa_SD"] * Kappa_SD) %>% 
+  mutate(Overall_Score = 
+           weights["Accuracy_Mean"] * Accuracy_Mean +
+           weights["AUC_Mean"] * AUC_Mean +
+           weights["Recall_Mean"] * Recall_Mean +
+           weights["Precision_Mean"] * Precision_Mean +
+           weights["F1_Score_Mean"] * F1_Score_Mean +
+           weights["OOB_Error_Mean"] * (1 - OOB_Error_Mean) +  # OOB_Error 越小越好，因此使用 (1 - OOB_Error)
+           weights["Kappa_Mean"] * Kappa_Mean)
+
+# 按综合评分排序
+result_df2 <- result_df %>% arrange(Microbe_Count) %>% 
+  select(Microbe_Count,Microbes,Overall_Score,Overall_Score_SD,everything())
+
+result_df2 
+
+head(result_df2)
+result_df3  = result_df2 %>%
+  mutate(Overall_Score_SD =  weights["Accuracy_SD"] * Accuracy_SD +
+           weights["AUC_SD"] * AUC_SD +
+           weights["Recall_SD"] * Recall_SD +
+           weights["Precision_SD"] * Precision_SD +
+           weights["F1_Score_SD"] * F1_Score_SD +
+           weights["OOB_Error_SD"] * (1 - OOB_Error_SD) +  # OOB_Error 越小越好，因此使用 (1 - OOB_Error)
+           weights["Kappa_SD"] * Kappa_SD) %>% select(2,3 ,23,24,25)
+ncol(result_df3)
+
+microbe_data  = result_df3 
+head(microbe_data)
+microbe_data$CI_lower <- microbe_data$Overall_Score - (microbe_data$Overall_Score_SD * 0.6)
+microbe_data$CI_upper <- microbe_data$Overall_Score +  (microbe_data$Overall_Score_SD * 0.6)
+
+microbe_data$CI_lower2 <- microbe_data$Overall_Score2 -  (microbe_data$Overall_Score_SD2 * 0.6)
+microbe_data$CI_upper2<-  microbe_data$Overall_Score2 + (microbe_data$Overall_Score_SD2 * 0.6)
+
+# Plot with confidence intervals
+library(lubridate)
+
+microbe_data_sorted <- microbe_data %>%
+  arrange(desc(Overall_Score))
+
+microbe_data_sorted$id =  1:nrow(microbe_data_sorted)
+
+
+microbe_data_sorted$color_group <- ifelse(microbe_data_sorted$id <= 23, "grey20", "grey60")  # 前23个点标记为红色
+
+# ggplot(microbe_data_sorted, aes(x = id, y = Overall_Score)) +  # 使用 id 作为 x 轴
+#   # 绘制第一条置信区间
+#   geom_ribbon(aes(ymin = CI_lower, ymax = CI_upper), fill = "firebrick2", alpha = 0.2) + 
+#   # 绘制第二条置信区间
+#   geom_ribbon(aes(ymin = CI_lower2, ymax = CI_upper2), fill = "lightblue", alpha = 0.4) + 
+#   # 绘制第一条折线
+#   geom_line(aes(y = Overall_Score), color = 'grey60', size = 1.5, group = 1) +  
+#  #  geom_point(aes(y = Overall_Score), color = 'grey60', size = 2) +   
+#   # 绘制第二条折线
+#   geom_line(aes(y =Overall_Score2), color = 'grey60', size = 1.5, group = 1) + 
+#   geom_point(aes(y = Overall_Score2, x = id, color = ifelse(id <= 23, "grey40", "grey60")), 
+#              size = 1.5, alpha = ifelse(df$id <= 24, 1, 0))+
+#   geom_point(aes(y = Overall_Score2,color = ifelse(id <= 24, "grey40", "grey60")), size = 1.5) +
+#   #geom_point(aes(y = Overall_Score2), color = 'grey60', size = 2) + 
+#   # # 设置 x 轴的标签
+#   #  scale_x_continuous(breaks = microbe_data_sorted$id, 
+#   #                     labels = microbe_data_sorted$Microbe) +  
+#   # scale_x_continuous(
+#   #   breaks = microbe_data_sorted$id[1:23], 
+#   #   labels = microbe_data_sorted$Microbe[1:23]
+#   # )+
+#   geom_point(aes(color = ifelse(id <= 24, "grey40", "grey60")), size = 1.5) +
+#   scale_color_identity() +
+#   theme_bw() +  # 使用白色背景主题
+#   theme(axis.text.x = element_text(hjust = 1)) +  # 旋转 x 轴标签
+#   labs(x = "Microbe", y = "Score", title = "Microbe Scores with Two Confidence Intervals")+
+#   theme(
+#     panel.background = element_rect(fill = "grey98"),
+#     plot.background = element_rect(fill = "grey98"),
+#     panel.grid.major.x =element_blank(),
+#     axis.line.x = element_line(color = "black"),
+#     axis.text = element_text(size=10, color="black",angle=90,hjust = 1,vjust = .5),
+#     axis.title.y =element_blank(),
+#     axis.title.x = element_blank(),
+#     axis.line.y = element_line(color = "black"),
+#     axis.ticks.x = element_blank())+
+#   theme(panel.grid.major = element_blank(),
+#          panel.grid.minor = element_blank())
 #   
-#   p 
-  
-ggsave("./result_and_plot/图片/re2/拮抗3.pdf",p,width =6, height = 4)  
-  
-  
- p+  geom_regon(aes(x0 = x0,y0 = y0,
-                    sides = 4,
-                    angle = 0,
-                    r = 0.5,
-                    fill =abundance),
-                color = 'black')
-  
-  
-  
-  geom_regon(aes(x0 = x0,
-                   y0 = y0,
-                  sides = 4,
-                  angle = 0,
-                  r = 0.5,
-                  fill = abundance),
-              radius = unit(0.3, 'cm'),
-              color = 'black') +
-  theme(plot.margin = margin(l = 2,t = 4,unit = 'cm')) +
-  coord_fixed(clip = 'off')
-  
-  dev.off()
-  
-  
-  
- 
-  
-  
-#----第一次发病率----
-data<- read_xlsx("./data/数据.xlsx",sheet = 7)
-  library(ggplot2)
-  pd = position_dodge(0.5)
-  p=ggplot(data, aes(x=day,y=Disease.index, colour=Group, group=Group))+
-          geom_errorbar(aes(ymin=Disease.index-Se, ymax=Disease.index+Se),
-                  width=1.4, 
-                  size=0.5, 
-                  colour="black",
-                  position=pd) +
-    geom_line(size=1, position=pd) +
-    geom_point(aes(color = Group),size=3, position=pd)+
-   scale_x_continuous(breaks = c(6,8,10,12,15,21,30))+
-    labs(x="Days after inocultaion",y="Disease incidence(%)")+
-    scale_fill_npg()+
-    scale_color_npg()+
-    theme_bw()+
-    theme(panel.grid.major = element_blank(),
-          panel.grid.minor = element_blank())
-  
-ggsave("./result_and_plot/图片/re2/发病率2.pdf",p,width = 7, height =5) 
-
-ggsave("发病率.pdf", width = 8, height =6)
-#----简化后定殖情况--------
-# 确定定殖的菌,统一名称，
-  
-ps= readRDS("./data/3代/ps3代.rds")  
-  
-otupath = "./result_and_plot/3代/" 
-source("G:\\Shared_Folder\\Function_local\\R_function\\micro/barMainplot.R")
-barpath = paste(otupath,"/Microbial_composition/",sep = "")
-dir.create(barpath)
-  
-
-j = "Genus"
-result = barMainplot(ps = ps,
-                         j = j,
-                         # axis_ord = axis_order,
-                         label = FALSE,
-                         sd = T,
-                         Top = 100)
-        
-
-  result[1] 
-    databar <- result[[2]] 
-    
-    write.csv(databar,"./result_and_plot/3代/Microbial_composition/组成.csv")
-
-  
-da = read.csv("./result_and_plot/3代/Microbial_composition/a2_Genus_bar_data.csv")  
-
-da2 = filter(da, aa %in% c("Stenotrophomonas","Chryseobacterium","Enterobacter",
-                          "Aeromicrobium"))
-
- 
-
-library(gg.gap)
-p=ggplot(da2,aes(aa,Abundance,fill= group))+
-   geom_bar(position = position_dodge(0.6),stat = "identity",color="black",
-            width = 0.5,alpha=0.8)+
-   theme_bw()+
-   theme(panel.grid.major = element_blank(),
-         panel.grid.minor = element_blank())+
-   #scale_fill_manual(values = mi)+
-   #geom_hline(yintercept = 78,linetype= 3, size= 0.25)+
-   theme(axis.text.x= element_text(size=13),
-         axis.text.y= element_text(size=13))+ 
-   scale_fill_npg()+
-   scale_color_npg()+
-   theme(axis.text.x=element_text(angle=30,hjust = 1,vjust = 1))
-   # #geom_errorbar(aes(ymin=Abundance-sd, ymax=Abundance+sd),
-   #              width=0.3, 
-   #              size=0.5, 
-   #              colour="black",
-   #              position =position_dodge(0.6) )
-   
- 
-
- p2=p+ gg.gap(plot = p,
-             segments = c(0.6,1),
-             #rel_heights = c(0.25, 0, 0.1),# 设置分隔为的三个部分的宽度
-             ylim = c(0,100)
-   )
 
 
-ggsave("./result_and_plot/3代/Microbial_composition/组成2.pdf",p2,width = 9, height =7)
- 
+microbe_data_sorted$id <- ifelse(microbe_data_sorted$id <= 23, microbe_data_sorted$id * 2,
+                                 46 + (microbe_data_sorted$id - 23) )
 
-
-id1= c("ASV_6","ASV_2","ASV_25","ASV_29","ASV_50",""    )  
- 
-data<- read_xlsx("./data/3代/otutab.xlsx",sheet = 1)  
-colnames(data)[1]="ID"
-
-
-
-
-
-head(data)
-tax= read.table("./data/3代/taxonomy.txt",header= T)
-colnames(tax)[1]="ID"
-
-head(tax)
-
-da2 =merge(data,tax,by= "ID")
-
-
-da3= da2 %>% filter (Family %in% c("Flavobacteriaceae","Xanthomonadaceae","Enterobacteriaceae",
-"Nocardioidaceae" )) %>% select(starts_with("M"),Genus,ID ) 
-
-  
-da4=da3 %>% pivot_longer(col= -c(ID,Genus), names_to = "id", values_to = "abundance")  
-  
-  
-
-
-
-
-#-----生物量-----
-# 数据
-
-runif(4,0.0012,0.0285)
-
-A=rnorm(8, mean = 0.30,sd = 0.04)
-
-write.csv(A,"./data/促生/促生.csv")
-
-# 读取数据
-data<- read_xlsx("./data/数据.xlsx",sheet = 8)
-
-data$group= factor(data$group,levels =unique(data$group) )
- 
-
-library(EasyStat)
-
-res = KwWlx2(data = data, i=3 )
-res[[1]]
-
-PlotresultBar = aovMuiBoxP(data = data, i= 3,sig_show ="abc",result = res[[1]])
-#提取结果
-p= PlotresultBar[[1]]+
-   scale_fill_npg()+
-   scale_color_npg()+
-   theme_bw()+
-   theme(panel.grid.major = element_blank(),
-         panel.grid.minor = element_blank())+
-   theme(axis.text.x= element_text(size=13),
-         axis.text.y= element_text(size=13))+
-   theme(axis.text.x=element_text(angle=30,hjust = 1,vjust = 1,colour = "black"),
-         axis.text.y =element_text(colour = "black"))
-    
-   
-ggsave("./result_and_plot/图片/RE3/生物量.pdf",p, width = 5, height =2.5)
-
-#------菌群定殖-----
-A = rnorm(8, mean = 6962356,sd = 562356)
-write.csv(A,"./data/促生/促生2.csv")
-
-data<- read_xlsx("./data/数据.xlsx",sheet = 9)
-
-data$group= factor(data$group,levels =unique(data$group))
-data$Dry_weight= log10(data$Dry_weight)
-
-#write.csv(data,"./data/促生/定殖.csv")
-
-# aovMcomper2   KwWlx2
-# 挑选
-data = filter(data, group != "Control")
-data$group
-res = KwWlx2(data = data %>% filter(group %in% c(data$group[1],data$group[11],
-                                    data$group[21],data$group[26],data$group[36])), i=5 )
-
-res[[1]]
-
-PlotresultBar = aovMuiBoxP1(data = data %>% filter(group %in% c(data$group[1],data$group[11],
-                                                                data$group[21],data$group[26],
-                                                              data$group[36])), i= 5,sig_show ="abc",result = res[[1]])
-#提取结果
-p =PlotresultBar[[1]]+
-  scale_fill_npg()+
-  #scale_color_npg()+
-  theme_bw()+
+microbe_data_sorted$nudge_direction <- ifelse(microbe_data_sorted$id %% 4 == 0,
+                                              0.15, -0.2)
+p =ggplot(microbe_data_sorted, aes(x = id, y = Overall_Score)) +
+  # 绘制第一条置信区间
+  geom_ribbon(aes(ymin = CI_lower, ymax = CI_upper), fill = "firebrick2", alpha = 0.2) + 
+  # 绘制第二条置信区间
+  geom_ribbon(aes(ymin = CI_lower2, ymax = CI_upper2), fill = "lightblue", alpha = 0.4) + 
+  # 绘制第一条折线
+  geom_line(aes(y = Overall_Score), color = 'grey60', size = 1.5, group = 1) +  
+  # 绘制第二条折线
+  geom_line(aes(y = Overall_Score2), color = 'grey60', size = 1.5, group = 1) + 
+  # 绘制前 24 个点
+  geom_point(data = microbe_data_sorted[microbe_data_sorted$id <= 46, ],
+             aes(y = Overall_Score2, x = id, color = ifelse(id <= 46, "grey40", "grey60")),
+             size = 1.5) +
+  geom_point(data = microbe_data_sorted[microbe_data_sorted$id <= 46, ],
+             aes( color = ifelse(id <= 46, "grey40", "grey60")),
+             size = 1.5) +
+  # 使用指定颜色显示
+  scale_color_identity() +
+  # # 设置 x 轴的标签，显示前 24 个微生物名称
+  # scale_x_continuous(
+  #   breaks = microbe_data_sorted$id[1:24], 
+  #   labels = microbe_data_sorted$Microbe[1:24])+
+  scale_color_identity() +
+  theme_bw() +  # 使用白色背景主题
+  theme(axis.text.x = element_text(hjust = 1)) +  # 旋转 x 轴标签
+  labs(x = "Microbe", y = "Score", title = "Microbe Scores with Two Confidence Intervals")+
+  theme(
+    panel.background = element_rect(fill = "grey98"),
+    plot.background = element_rect(fill = "grey98"),
+    panel.grid.major.x =element_blank(),
+    axis.line.x = element_line(color = "black"),
+    axis.text = element_text(size=10, color="black",hjust = 1,vjust = .5),
+    axis.title.y =element_blank(),
+    axis.title.x = element_blank(),
+    axis.line.y = element_line(color = "black"),
+    axis.ticks.x = element_blank())+
   theme(panel.grid.major = element_blank(),
         panel.grid.minor = element_blank())+
-  theme(axis.text.x= element_text(size=10),
-        axis.text.y= element_text(size=10))+
-  theme(axis.text.x=element_text(angle=30,hjust = 1,vjust = 1,colour = "black"),
-        axis.text.y =element_text(colour = "black"))
-p
-ggsave("./result_and_plot/图片/RE3/定殖量7_14.pdf",p, width = 5, height =4)
-
-# 总定殖
-data = filter(data, group != "Control")
-data$group
-res = KwWlx2(data = data, i=5 )
-
-res[[1]]
-
-PlotresultBar = aovMuiBoxP1(data = data , i= 5,sig_show ="abc",result = res[[1]])
-#提取结果
-p = PlotresultBar[[1]]+
-  scale_fill_npg()+
-  #scale_color_npg()+
-  theme_bw()+
-  theme(panel.grid.major = element_blank(),
-        panel.grid.minor = element_blank())+
-  theme(axis.text.x= element_text(size=10),
-        axis.text.y= element_text(size=10))+
-  theme(axis.text.x=element_text(angle=30,hjust = 1,vjust = 1,colour = "black"),
-        axis.text.y =element_text(colour = "black"))
-p
-ggsave("./result_and_plot/图片/RE3/定殖量all2.pdf",p, width = 6, height =4)
-
-
-
-#生物膜-定殖相关-----
-colnames(data)
-data<- read_xlsx("./data/数据.xlsx",sheet = 9)
-data2 = data %>% select(`The  colonization of bacteria1`, group2, `Biofilm production（g）` )
-
-data2=na.omit(data2)
-
-p=ggplot2::ggplot(data2,aes(x = `Biofilm production（g）`,
-                          y =`The  colonization of bacteria1`))+
-  ggplot2::geom_point(size=3,
-                      aes(color = group2),
-                      #  color= "#E41A1C",
-                      alpha= 0.7) +
-  ggpubr::stat_cor()+
-  # ggpubr::stat_poly_eq(aes(label = ..adj.rr.label..))+
-  #ggpubr::stat_regline_equation()++
-  geom_smooth(method=lm, se=T)+
-  theme_bw()+
-  theme(panel.grid.major = element_blank(),
-        panel.grid.minor = element_blank())+
-  theme(axis.title.y =element_text(size = 20,colour = "black"),
-        axis.title.x =element_text(size = 20,colour = "black"),
-        axis.text = element_text(size = 20),
-        axis.text.x = element_text(colour = "black",size = 14),
-        axis.text.y = element_text(colour = "black",size = 14))
-p
-ggsave("./result_and_plot/图片/RE3/定殖量_生物膜相关.pdf",p, width = 6, height =5)
-
-
-#---- 结果4-----
-#----ROS----
-?read_xlsx() 
-df <- read_xlsx("./data/数据.xlsx",sheet = 10
-                #,col_names = c("type",
-               # "N1","N2","N3","type")
-                ) [,1:5] 
-
-colnames(df) =  c("type",  "N1","N2","N3","time")
-df= df %>% pivot_longer(-c(type,time)) %>% 
-      select(-name) %>% 
-      group_by(type,time) %>% 
-      summarise(value_mean=mean(value),sd=sd(value),se=sd(value)/sqrt(n())) %>% 
-        arrange(time) 
-
-
-head(df)
-df$time <- factor(df$time,levels = c("0h","1h","3h","6h","9h","22h"))
-
-#colnames(df)[3]="ROS production(RLU)"
-
-# df$type <- factor(df$type,levels = read_xlsx("./data/数据.xlsx",sheet = 10) %>% 
-#                     pivot_longer(-c(type,time)) %>%
-#                     select(type) %>% distinct() %>% pull())
-
-p= df %>% ggplot(aes(time,value_mean,group=type,ymin=value_mean-se,ymax=value_mean+se))+
-    geom_errorbar(width=0.1,size=0.3)+
-  geom_line(aes(color = type))+
-  #geom_point(key_glyph="polygon",aes(color=type))+
-  geom_point(aes(fill=type),color="black",size=3.5,show.legend = T,shape=21)+
-  scale_fill_npg()+
-  scale_color_npg()+
-  scale_x_discrete(guide = "prism_bracket")+
-  #scale_y_continuous(limits = c(0,50000000),minor_breaks = seq(0,10000000), guide = "prism_offset_minor")+
-  #annotate("text",x = 3,y=16,label="***",size=7,color="#35627F")+
-  labs(x="Time",y="ROS production(RLU)")+
-  theme_prism(base_line_size =0.5)+
-  theme(plot.margin=unit(c(0.1,0.1,0.1,0.1),units=,"cm"),
-        axis.line = element_line(color = "black",size = 0.4),
-        panel.grid.minor = element_blank(),
-        panel.grid.major = element_line(size = 0.2,color = "#e5e5e5"),
-        axis.text.y = element_text(color="black",size=10),
-        axis.text.x = element_text(margin = margin(t = -5),color="black",size=10),
-        legend.key=element_blank(),
-        legend.title = element_blank(),
-        legend.text = element_text(color="black",size=8),
-        legend.spacing.x=unit(0.1,'cm'),
-        legend.spacing.y=unit(1,'cm'),
-        legend.key.width=unit(0.7,'cm'),
-        legend.key.height=unit(0.4,'cm'),
-        legend.background=element_blank(),
-        legend.box.margin = margin(0,0,0,0))+
-   theme(panel.grid.major = element_blank(),
-         panel.grid.minor = element_blank())
-
-ggsave("./result_and_plot/图片/RE4/ROS2.pdf",p,width = 5,height = 2.5)
-
-
-# 酶活-----
-library(EasyStat)
-head(data_wt)
-
-A=rnorm(10, mean =9,sd =3)
-
-
-
-write.csv(A,"./data/促生/促生.csv")
-
-data<- read_xlsx("./data/数据.xlsx",sheet = 12 )[,1:6] 
-
-colnames(data) =c("id","group","PPO","POD","LOX","PAL")
-
-data %>% 
-  gather(key = "meihuo",value = "content",-id,-group) %>%
-  ggplot() + geom_bar(aes(y = group,x = content,fill = group),stat = "identity") +
-  facet_wrap(. ~ meihuo, scales = "free_x", ncol = 2) 
-
-
-head(data)
-#?FacetMuiPlotresultBar2
-#MuiKwWlx2 MuiaovMcomper
- result =MuiKwWlx2(data,num = 3:6)
- 
- data$group= factor(data$group,levels =unique(data$group)) 
- 
- 
-  res = FacetMuiPlotresultBar(
-  data = data,
-  result = result,
-  ncol = 2,
-  num = 3:6)
-
- 
-p = res[[1]]
-p
-#table(data$group)%>% as.data.frame()%>% .$Var1
-p2 = p +
- # geom_bar(stat= "identity",position = position_dodge(0.7), width = 0.5)+
-    scale_fill_npg()+
-    scale_color_npg()+
-    theme_bw()+
-    theme(panel.grid.major = element_blank(),
-          panel.grid.minor = element_blank())+
-    theme(axis.text.x=element_text(colour = "black"),
-          axis.text.y =element_text(colour = "black"))+
-  scale_x_discrete(limits = c("Control","Aero.","Chry.","Enter.","Sten.","组合"))
-p2
-
-ggsave("./result_and_plot/图片/RE4/酶活2.pdf",p2, width = 7, height =4.5)  
-  
-   
-data <- read_xlsx("./data/酶活1.xlsx",sheet = 1) [,c(1:8)]
-#data$group = paste(data$id,data$group,sep = "")
-data$day
-
-# 1 3 7 
-da1 = data %>% filter(day==7) 
-
-res = MuiaovMcomper2(data = da1,num = c(4),method_Mc = "LSD")
-res
-res2 = FacetMuiPlotresultBox(
-  data = da1,
-  result = res,
-  ncol = 2,
-  num = 4:8)
-
-
-p = res2[[1]]
-p
-#table(data$group)%>% as.data.frame()%>% .$Var1
-p2 = p +
-  # geom_bar(stat= "identity",position = position_dodge(0.7), width = 0.5)+
-  scale_fill_npg()+
-  scale_color_npg()+
-  theme_bw()+
-  theme(panel.grid.major = element_blank(),
-        panel.grid.minor = element_blank())+
-  theme(axis.text.x=element_text(colour = "black"),
-        axis.text.y =element_text(colour = "black"))+
-  scale_x_discrete(limits = c("Control","Aero.","Chry.","Enter.","Sten.","组合"))
-p2
-
-ggsave("./result_and_plot/图片/RE4/酶活3.pdf",p2, width = 6, height =7)  
-
-
-
-
-data1 = data %>% pivot_longer(cols = -c(id,day,group),
-                            names_to = "enzy", 
-                            values_to = "count",
-                           ) %>% group_by(group,day,enzy)%>% 
-       summarise(sd = sd(count),mean = mean(count))
-
-data2 = data1%>% filter(enzy =="JA")
-data2 = data1%>% filter(day =="7")
-
-
-
-
-
-
-
-
-ggplot(data2,aes(x= day, y=mean,group= group )) + 
-  geom_bar(aes(fill= group),stat = "identity",
-           position ="dodge", width = 0.9 )
-
-
-
-write.csv(data1,"./data/酶活7.csv")
-write.csv(data2,"./data/酶活7_统计.csv")
-
-
-
-#---- 筛菌-----
-da= read.csv("./data/注释信息.csv")
-head(da)
-unique(da$G_seq)
-
-#-----无菌发病-----
-
-
-data<- read_xlsx("./data/数据.xlsx",sheet = 13)
-
-data$group= factor(data$group,levels =unique(data$group) )
-
-
-library(EasyStat)
-
-res = KwWlx2(data = data, i=3 )
-res[[1]]
-
-PlotresultBar = aovMuiBoxP(data = data, i= 3,sig_show ="abc",result = res[[1]])
-#提取结果
-p= PlotresultBar[[1]]+
-  scale_fill_npg()+
-  scale_color_npg()+
-  theme_bw()+
-  theme(panel.grid.major = element_blank(),
-        panel.grid.minor = element_blank())+
-  theme(axis.text.x= element_text(size=13),
-        axis.text.y= element_text(size=13))+
-  theme(axis.text.x=element_text(angle=30,hjust = 1,vjust = 1,colour = "black"),
-        axis.text.y =element_text(colour = "black"))
-p
-
-ggsave("./result_and_plot/图片/RE3/发病率.pdf",p, width = 8, height =4)
-     
-#-----生物膜产量-----
-data<- read_xlsx("./data/数据.xlsx",sheet = 15)
-
-head(data)
-data$group= factor(data$group,levels =unique(data$group) )
-
-#rnorm(5, mean =0.06,sd =0.02)
-
-library(EasyStat)
-
-?EasyStat
-
-res = KwWlx2(data = data , i=3 )
-PlotresultBar = aovMuiBoxP1(data = data, 
-                           i= 3,sig_show ="abc",result = res[[1]])
-p = PlotresultBar[[1]]+
-    theme_bw()+
-  scale_fill_npg()+
-  #scale_color_npg()+
-  theme_bw()+
-  ylab("Biofilm production")+
-  theme(panel.grid.major = element_blank(),
-        panel.grid.minor = element_blank())+
-  theme(axis.text.x= element_text(size=13),
-        axis.text.y= element_text(size=13))+
-  theme(axis.text.x=element_text(angle=30,hjust = 1,vjust = 1,colour = "black"),
-        axis.text.y =element_text(colour = "black"))
+  # 添加前 23 个点的标签，避免重叠
+  geom_text_repel(data = microbe_data_sorted[microbe_data_sorted$id <=46, ],
+                  aes(y = Overall_Score, x = id, label = Microbe),
+                  nudge_y = microbe_data_sorted[microbe_data_sorted$id <= 46, ]$nudge_direction, 
+                  hjust = 0.5,
+                  size = 4, color = "black",segment.linetype = "dotted")
+# 添加标签的连线
+# geom_segment(data = microbe_data_sorted[microbe_data_sorted$id <= 23, ],
+#              aes(yend = Overall_Score + 0.05),
+#              linetype = "dotted", color = "grey40")
 
 p
-ggsave("./result_and_plot/图片/RE3/生物膜all2.pdf",p, width = 7, height = 4)
-
-
-res = aovMcomper2(data = data[c(1:25),], i=3, method_Mc = "LSD")
-
-res[[1]]
-
-
-PlotresultBar = aovMuiBoxP1(data = data[c(1:25),], i= 3,sig_show ="abc",
-                           result = res[[1]])
-
-#提取结果
-p= PlotresultBar[[1]]+
-  scale_fill_npg()+
-  #scale_color_npg()+
-  theme_bw()+
-  ylab("Biofilm production")+
-  theme(panel.grid.major = element_blank(),
-        panel.grid.minor = element_blank())+
-  theme(axis.text.x= element_text(size=13),
-        axis.text.y= element_text(size=13))+
-  theme(axis.text.x=element_text(angle=30,hjust = 1,vjust = 1,colour = "black"),
-        axis.text.y =element_text(colour = "black"))
-  
-
-p
-da2= PlotresultBar[[2]] %>% select(group ,stat )  %>% distinct()
-
-da = data %>% group_by(group)%>%
-  summarise(mean = mean(data$`Biofilm production（g）`), 
-            sd=sd(data$`Biofilm production（g）`)) %>% cbind(da2)
-
-write.csv(da,"./result_and_plot/图片/RE3/生物膜.csv")
-ggsave("./result_and_plot/图片/RE3/生物膜27_19.pdf",p, width = 6, height =3)
-
-
-#----雷达图
-#devtools::install_github('ricardo-bion/ggradar', dependencies = TRUE)
-da3 = data %>% select(id, value)
-library(ggradar)
-
-da3 = da3%>%  group_by(id)%>%  mutate(n= row_number())%>% pivot_wider( names_from = n, values_from = value)
-da3= da3 [c(1:5),c(1:4)] 
-
-colnames(da3)[1]="Group"
-
-p= ggradar(da3,centre.y = 0, grid.min = 0.01,
-        grid.mid = 0.025,
-        grid.max = 0.07,
-        values.radar = c(0.01, 0.03, 0.06),
-        background.circle.colour = "white")
-
-ggsave("./result_and_plot/图片/RE3/生物膜-移除.pdf",p, width = 15, height =10)
-
-
-
-#-----致病力-----
-
-data<- read_xlsx("./data/数据.xlsx",sheet = 16)
-
-data
-data$group= factor(data$group,levels =unique(data$group) )
-res = KwWlx2(data = data, i=3)
-res[[1]]
-
-PlotresultBar = aovMuiBoxP1(data = data, i= 3,sig_show ="abc",result = res[[1]])
-
-#提取结果
-p= PlotresultBar[[1]]+
-  scale_fill_npg()+
-  scale_color_npg()+
-  theme_bw()+
-  theme(panel.grid.major = element_blank(),
-        panel.grid.minor = element_blank())+
-  theme(axis.text.x= element_text(size=13),
-        axis.text.y= element_text(size=13))+
-  theme(axis.text.x=element_text(angle=30,hjust = 1,vjust = 1,colour = "black"),
-        axis.text.y =element_text(colour = "black"))
-
-p
-
-ggsave("./result_and_plot/图片/RE3/致病力OD2.pdf",p, width = 4, height =3)
-
-#------致病力相关----
-data<- read_xlsx("./data/数据.xlsx",sheet = 16)
-??ggpubr::stat_poly_eq
-library(ggpubr)
-lm(OD530~N,data) %>%summary()
-data$group = as.factor(data$group)
-ggplot(data,aes(x = OD530,y = N)) +
-  geom_point(aes( fill= group),
-                      size=3,
-                      #color = "black",
-                        #color= "#E41A1C",
-                      alpha= 0.7
-             ) +
-  ggpubr::stat_cor()+
- # ggpubr::stat_poly_eq(aes(label = ..adj.rr.label..))+
-  #ggpubr::stat_regline_equation()++
-  geom_smooth(method=lm, se=T)+
-  theme_bw()+
-  theme(panel.grid.major = element_blank(),
-        panel.grid.minor = element_blank())+
-  theme(axis.title.y =element_text(size = 20,colour = "black"),
-        axis.title.x =element_text(size = 20,colour = "black"),
-        axis.text = element_text(size = 20),
-        axis.text.x = element_text(colour = "black",size = 14),
-        axis.text.y = element_text(colour = "black",size = 14))
-p
-ggsave("./result_and_plot/图片/RE3/致病力cor.pdf",p, width = 4, height =3)
-
-
-# 自然发病率----
-rnorm(8, mean =35,sd =5)
-data<- read_xlsx("./data/数据.xlsx",sheet = 19)
-
-head(data)
-#data$group = as.factor(data$group)
-# data2= data %>% group_by(group) %>%
-#   summarise(mean = mean(`Disease incidence (%)`),sd = sd(`Disease incidence (%)`))
-data$group= factor(data$group,levels =unique(data$group) )
-library(EasyStat)
-data
-"Pepper" "Tomato"
-# res = KwWlx2(data = data %>%filter(Plant =="Tomato") %>% filter(group %in% c(data$group[1],data$group[9],
-#                                                  data$group[22],data$group[29],
-#                                                  data$group[36],data$group[43],
-#                                                  data$group[50],data$group[57],
-#                                                  data$group[64])) , i=4 )
-
-res = aovMcomper(data = data %>%filter(Plant =="Pepper") %>% 
-                   filter(group %in% c(data$group[1],data$group[9],
-                                                      data$group[22],data$group[29],
-                                                      data$group[36],data$group[43],
-                                                      data$group[50],data$group[57],
-                                                      data$group[64])), i=4, method_Mc = "LSD")
-
-
-res[[1]]
-
-PlotresultBar = aovMuiBoxP1(data %>%filter(Plant =="Pepper") %>% filter(group %in% c(data$group[1],data$group[9],
-                                                               data$group[22],data$group[29],
-                                                               data$group[36],data$group[43],
-                                                               data$group[50],data$group[57],
-                                                               data$group[64])), i= 4,sig_show ="abc",result = res[[1]])
-#提取结果
-p = PlotresultBar[[1]]+
-   scale_fill_npg()+
-   #scale_color_npg()+
-   theme_bw()+
-   theme(panel.grid.major = element_blank(),
-        panel.grid.minor = element_blank())+
-   theme(axis.text.x= element_text(size=13),
-        axis.text.y= element_text(size=13))+
-   theme(axis.text.x=element_text(angle=30,hjust = 1,vjust = 1,colour = "black"),
-        axis.text.y =element_text(colour = "black"))+
-  ylim(0,60)
-  
-  
-p
-
-# 长变宽 
-# spread(data,Plant,`Disease incidence (%)`)
-# data$group = as.factor(data$group)
-# result = MuiaovMcomper(data = data,num = c(3:5),method_Mc = "LSD")
-# result1 = FacetMuiPlotresultBox(data = data,num = c(3:5),result = result,sig_show ="abc",ncol = 3 )
-# p <- result1[[1]]
-
-
-ggsave("./result_and_plot/图片/RE4/发病率_pep.pdf",p, width = 5, height =3.5)
-
-# 健康-发病调控网落----
-# 生长指标
-n= rnorm(5,9.96,3.1)%>% as.data.frame()
-n
-write.csv(n,"./data/调控.csv")
-data<- read_xlsx("./data/数据.xlsx",sheet = 22)
-data$group = as.factor(data$group)
-result = MuiaovMcomper(data = data,num = c(3:5),method_Mc = "LSD")
-result1 = FacetMuiPlotresultBox(data = data,num = c(3:5),result = result,sig_show ="abc",ncol = 3 )
-p <- result1[[1]]
-p= p+scale_fill_npg()+
-  #scale_color_npg()+
-  theme_bw()+
-  theme(panel.grid.major = element_blank(),
-        panel.grid.minor = element_blank())+
-  theme(axis.text.x= element_text(size=13),
-        axis.text.y= element_text(size=13))+
-  theme(axis.text.x=element_text(angle=30,hjust = 1,vjust = 1,colour = "black"),
-        axis.text.y =element_text(colour = "black"))
-#dir.create("./result_and_plot/图片/RE5")
-ggsave("./result_and_plot/图片/RE5/指标2.pdf",p, width = 8, height =3.5)
-
-# 根系指标
-
-n =   rnorm(5, mean =0.21,sd = 0.1) %>% as.data.frame()
-n
-write.csv(n,"./data/调控2.csv")
-data<- read_xlsx("./data/数据.xlsx",sheet = 21)
-data$group = as.factor(data$group)
-result = MuiaovMcomper(data = data,num = c(3:5),method_Mc = "LSD")
-result1 = FacetMuiPlotresultBox(data = data,num = c(3:5),result = result,sig_show ="abc",ncol = 3 )
-p <- result1[[1]]
-p= p+scale_fill_npg()+
-  #scale_color_npg()+
-  theme_bw()+
-  theme(panel.grid.major = element_blank(),
-        panel.grid.minor = element_blank())+
-  theme(axis.text.x= element_text(size=13),
-        axis.text.y= element_text(size=13))+
-  theme(axis.text.x=element_text(angle=30,hjust = 1,vjust = 1,colour = "black"),
-        axis.text.y =element_text(colour = "black"))
-#dir.create("./result_and_plot/图片/RE5")
-ggsave("./result_and_plot/图片/RE5/指标.pdf",p, width = 8, height =3.5)
-
-
-
-
 

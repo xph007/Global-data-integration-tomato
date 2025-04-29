@@ -1,13 +1,11 @@
-# code
 # data obtained from 10.6084/m9.figshare.28890344
 #Fig.1B-----
 library(tidymodels)
 library(discrim)
 library(plotROC)
 library(pROC)
-otutab_t =  read_excel("data.xlsx",sheet = 1)
+otutab_t =  read_excel("data.xlsx",sheet = "otutab_t")
 df = otutab_t
-df$MPE
 set.seed(154) # For reproducibility
 data_split <- initial_split(df, prop = 0.7, strata = MPE)
 train_data <- training(data_split)
@@ -166,7 +164,7 @@ print(performance_comparison)
 
 #Fig.1C------
 #plot
-data =  read_excel("data.xlsx",sheet = 2)
+data =  read_excel("data.xlsx",sheet = "Fig.1C")
 colors = c("#E64B35", "#4DBBD5" ,"#00A087" ,"#3C5488","#F39B7F","#DC0000" )
 data2 <- data.frame(
   model = rep(data$models, each = 2),  
@@ -187,7 +185,7 @@ data2 <- data.frame(
 
 #Fig.1D-----
 # plot
-microbe_data_sorted = read_excel("data.xlsx", sheet = 3)
+microbe_data_sorted = read_excel("data.xlsx", sheet = "Fig.1D")
 
 microbe_data_sorted$id <- ifelse(microbe_data_sorted$id <= 23, microbe_data_sorted$id * 2,
                                  46 + (microbe_data_sorted$id - 23))
@@ -237,12 +235,11 @@ p = ggplot(microbe_data_sorted, aes(x = id, y = Overall_Score)) +
                   size = 4, color = "black", segment.linetype = "dotted")
  p
 # data process   
-ord <- read_excel("data.xlsx", sheet = 5) 
+ord <- microbe_data_sorted
 microbes <- ord$Microbe
-
 # Initialize result dataframe
 result_df <- data.frame()
-for (i in 1:999) {
+for (i in 1:99) {
   set.seed(i)
   
   # Initialize an empty feature set
@@ -376,8 +373,7 @@ top_n <- 23
 microbe_data_sorted$color_group <- ifelse(microbe_data_sorted$id <= top_n, "grey20", "grey60")
 
 #Fig.1E------
-x <- read_excel("./data.xlsx", sheet = 4)
-table(x$level)
+x <- read_excel("./data.xlsx", sheet = "Fig.1E")
 p = ggplot(x, aes(x=otu, y=neglogp, color=Phylum, size=logCPM, shape=level)) +
   geom_point(alpha=.8) + 
   geom_hline(yintercept=FDR, linetype=2, color="grey30") +
@@ -388,9 +384,8 @@ p = ggplot(x, aes(x=otu, y=neglogp, color=Phylum, size=logCPM, shape=level)) +
   theme_classic()+
   theme(axis.ticks.x=element_blank(),axis.text.x=element_blank(),legend.position="top") 
 
-
 #Fig.2B----
-da = read_xlsx("./data.xlsx",sheet = 6)
+da = read_xlsx("./data.xlsx",sheet = "Fig.2B")
 da3 = pivot_longer(da,col=-ID2, 
                    names_to = "id", 
                    values_to = "anta")
@@ -407,9 +402,8 @@ p = ggplot(da3,aes(ID2,id)) +
   theme(axis.text.x = element_text(angle = 45,hjust = 1)) 
 
 #Fig.2C----
-data<- read_xlsx("data.xlsx",sheet = 5)
+data<- read_xlsx("data.xlsx",sheet = "Fig.2C")
 pd = position_dodge(0.5)
-data$Group
 
 p = ggplot(data, aes(x=day,y=Disease.index, colour=Group, group=Group))+
   geom_errorbar(aes(ymin=Disease.index-Se, ymax=Disease.index+Se),
@@ -428,9 +422,6 @@ p = ggplot(data, aes(x=day,y=Disease.index, colour=Group, group=Group))+
         panel.grid.minor = element_blank())
 p
 
-
-
-
 #Fig.3D----
 data<- read_xlsx("data.xlsx", sheet = "Fig.3D")
 data2 =  data %>% filter(plant ==  "pepper") %>%  select(ID,group,Disease.index)
@@ -448,9 +439,6 @@ PlotresultBar[[1]]+
         axis.text.y =element_text(colour = "black"))+
   scale_x_discrete(limits = c("Control", "Sphi", "Micr", "Aeri","Stre","SynCom_III1","SynCom_III2","SynCom_III3",
                               "SynCom_III4"))
-
-
-
 #Fig.4D----
 # Load necessary libraries
 library(readxl)    # For reading Excel files
@@ -588,8 +576,6 @@ for (met in unique(otu_long$Metabolite)) {
 
 # Multiple testing correction (FDR adjustment)
 results$ck_rs_fdr <- p.adjust(results$p_value, method = "BH")
-
-
 
 #Fig.4F-----
 dat =  read.xlsx("./data.xlsx",sheet = "Fig.4F.1")

@@ -1,0 +1,784 @@
+# code
+#Fig.1B-----
+library(tidymodels)
+library(discrim)
+library(plotROC)
+library(pROC)
+otutab_t =  read_excel("data.xlsx",sheet = 1)
+df = otutab_t
+df$MPE
+set.seed(154) # For reproducibility
+data_split <- initial_split(df, prop = 0.7, strata = MPE)
+train_data <- training(data_split)
+test_data <- testing(data_split)
+# Define recipe on training data
+rec <- recipe(MPE ~ ., train_data)
+
+# Your model definitions remain the same
+dt_mod <- decision_tree() %>%
+  set_engine("rpart") %>%
+  set_mode("classification")
+
+logistic_mod <-
+  logistic_reg() %>%
+  set_engine('glm')%>%
+  set_mode("classification")
+
+nnet_mod <-
+  mlp() %>%
+  set_engine('nnet', MaxNWts = 5000) %>%
+  set_mode('classification')
+
+naivebayes_mod <-
+  naive_Bayes() %>%
+  set_engine('naivebayes')
+
+kknn_mod <-
+  nearest_neighbor() %>%
+  set_engine('kknn') %>%
+  set_mode('classification')
+
+rf_mod <-
+  rand_forest() %>%
+  set_engine('ranger') %>%
+  set_mode('classification')
+
+
+svm_mod <-
+  svm_linear()%>%
+  set_engine('kernlab') %>%
+  set_mode('classification')
+
+
+lda_mod <- discrim_linear() %>%
+  set_engine("MASS") %>%
+  set_mode("classification")
+
+
+# Create workflow set with all models
+wf <- workflow_set(preproc = list(rec),
+                   models = list(
+                     dt = dt_mod,
+                     log = logistic_mod,
+                     nb = naivebayes_mod,
+                     nnet = nnet_mod,
+                     #   knn = kknn_mod,
+                     rf = rf_mod,
+                     svm = svm_mod,
+                     lda = lda_mod
+                   ))
+# Step 2: Create cross-validation folds from TRAINING data only
+folds <- vfold_cv(train_data, v = 10, strata = MPE)
+
+# Save predictions for ROC curves
+ctr <- control_resamples(save_pred = TRUE)
+
+# Fit and evaluate all models using cross-validation on training data
+wf_res <- wf %>% workflow_map("fit_resamples",
+                              resamples = folds,
+                              control = ctr)
+
+wf_res %>% 
+  collect_metrics() %>% 
+  filter(.metric == "accuracy")
+# Examine cross-validation results
+wf_res$info
+autoplot(wf_res, metric = "roc_auc")
+
+# Calculate ROC AUC from cross-validation
+cv_metrics <- collect_predictions(wf_res) %>%
+  group_by(wflow_id) %>%
+  roc_auc(MPE, .pred_Disease)
+
+# Visualize cross-validation ROC curves
+cv_predictions <- collect_predictions(wf_res) %>%
+  mutate(d = ifelse(MPE == "Disease", 1, 0))
+
+cv_roc_plot <- cv_predictions %>%
+  group_by(wflow_id) %>%  
+  ggplot(aes(m = .pred_Disease, d = d, color = wflow_id)) +
+  geom_roc(labels = FALSE, n.cuts = 0,linejoin="mitre" ) 
+
+print(cv_roc_plot)
+
+roc_data = cv_predictions %>%
+  group_by(wflow_id) %>% 
+  # filter(! model %in% c("svm_rbf","mlp"))  %>%  
+  ggplot(aes(m = .pred_Disease, d = d, color = wflow_id)) +
+  geom_roc(labels = FALSE, n.cuts = 0,linejoin="mitre" ) 
+
+
+cv_predictions %>%
+  group_by(wflow_id) %>% .$model %>% unique()
+
+# Step 3: Final evaluation on test set
+test_results <- list()
+
+for (model_id in wf_res$wflow_id) {
+  # Extract the specific workflow
+  current_wf <- extract_workflow(wf_res, model_id)
+  
+  # Fit on full training set and evaluate on test set
+  final_fit <- last_fit(current_wf, split = data_split)
+  
+  # Store results
+  test_results[[model_id]] <- collect_predictions(final_fit)
+}
+
+# Combine all test predictions
+test_preds <- bind_rows(test_results, .id = "model")
+
+# Calculate metrics on test set
+test_metrics <- test_preds %>%
+  group_by(model) %>%
+  roc_auc(MPE, .pred_Disease)
+
+# （Accuracy）
+test_metrics <- test_preds %>%
+  group_by(model) %>%
+  accuracy(truth = MPE, estimate = .pred_class)  
+
+# Plot ROC curves for test set
+test_roc_plot <- test_preds %>%
+  mutate(d = ifelse(MPE == "Disease", 1, 0)) %>%
+  ggplot(aes(m = .pred_Disease, d = d, color = model)) +
+  geom_roc(labels = FALSE, n.cuts = 0,linejoin="mitre") +
+  labs(title = "ROC Curves - Test Set")
+
+print(test_roc_plot)
+
+roc_data =  test_preds %>%
+  mutate(d = ifelse(MPE == "Disease", 1, 0))
+
+# Compare cross-validation and test performance
+performance_comparison <- cv_metrics %>%
+  rename(cv_auc = .estimate) %>%
+  select(wflow_id, cv_auc) %>%
+  left_join(
+    test_metrics %>%
+      rename(test_auc = .estimate) %>%
+      select(model, test_auc),
+    by = c("wflow_id" = "model")
+  )
+
+print(performance_comparison)
+
+#Fig.1C------
+#plot
+data =  read_excel("data.xlsx",sheet = 2)
+colors = c("#E64B35", "#4DBBD5" ,"#00A087" ,"#3C5488","#F39B7F","#DC0000" )
+data2 <- data.frame(
+  model = rep(data$models, each = 2),  
+  part = rep(c("top", "bottom"), length(data$models)),  
+  accuracy =rep(data$accuracy, each = 2) * rep(c(0.25, 0.75)),
+  fill = as.vector(rbind(colors, rep("gray", length(colors)))) 
+)
+
+ ggplot(data2, aes(x = reorder(model,desc(accuracy)), y = accuracy, fill = fill)) +
+  geom_bar(stat = "identity", width = 0.95, color = "black") + 
+  coord_polar(start = 0) +  
+  scale_fill_identity() +  
+  theme_void()+   
+  theme(
+    plot.title = element_text(hjust = 0.5, size = 20, face = "bold"),
+    legend.position = "none",
+    plot.margin = margin(20, 20, 20, 20)
+
+#Fig.1D-----
+# plot
+microbe_data_sorted = read_excel("data.xlsx", sheet = 3)
+
+microbe_data_sorted$id <- ifelse(microbe_data_sorted$id <= 23, microbe_data_sorted$id * 2,
+                                 46 + (microbe_data_sorted$id - 23))
+
+microbe_data_sorted$nudge_direction <- ifelse(microbe_data_sorted$id %% 4 == 0,
+                                              0.15, -0.2)
+
+p = ggplot(microbe_data_sorted, aes(x = id, y = Overall_Score)) +
+  # Draw the first confidence interval
+  geom_ribbon(aes(ymin = CI_lower, ymax = CI_upper), fill = "firebrick2", alpha = 0.2) + 
+  # Draw the second confidence interval
+  geom_ribbon(aes(ymin = CI_lower2, ymax = CI_upper2), fill = "lightblue", alpha = 0.4) + 
+  # Draw the first line plot
+  geom_line(aes(y = Overall_Score), color = 'grey60', size = 1.5, group = 1) +  
+  # Draw the second line plot
+  geom_line(aes(y = Overall_Score2), color = 'grey60', size = 1.5, group = 1) + 
+  # Plot the first 24 points
+  geom_point(data = microbe_data_sorted[microbe_data_sorted$id <= 46, ],
+             aes(y = Overall_Score2, x = id, color = ifelse(id <= 46, "grey40", "grey60")),
+             size = 1.5) +
+  geom_point(data = microbe_data_sorted[microbe_data_sorted$id <= 46, ],
+             aes(color = ifelse(id <= 46, "grey40", "grey60")),
+             size = 1.5) +
+  # Use specified colors
+  scale_color_identity() +
+  scale_color_identity() +
+  theme_bw() +  # Use a white background theme
+  theme(axis.text.x = element_text(hjust = 1)) +  # Rotate x-axis labels
+  labs(x = "Microbe", y = "Score", title = "Microbe Scores with Two Confidence Intervals")+
+  theme(
+    panel.background = element_rect(fill = "grey98"),
+    plot.background = element_rect(fill = "grey98"),
+    panel.grid.major.x = element_blank(),
+    axis.line.x = element_line(color = "black"),
+    axis.text = element_text(size=10, color="black", hjust = 1, vjust = .5),
+    axis.title.y = element_blank(),
+    axis.title.x = element_blank(),
+    axis.line.y = element_line(color = "black"),
+    axis.ticks.x = element_blank())+
+  theme(panel.grid.major = element_blank(),
+        panel.grid.minor = element_blank())+
+  # Add labels to the first 23 points, avoiding overlap
+  geom_text_repel(data = microbe_data_sorted[microbe_data_sorted$id <= 46, ],
+                  aes(y = Overall_Score, x = id, label = Microbe),
+                  nudge_y = microbe_data_sorted[microbe_data_sorted$id <= 46, ]$nudge_direction, 
+                  hjust = 0.5,
+                  size = 4, color = "black", segment.linetype = "dotted")
+ p
+# data process   
+ord <- read_excel("data.xlsx", sheet = 5) 
+microbes <- ord$Microbe
+
+# Initialize result dataframe
+result_df <- data.frame()
+for (i in 1:999) {
+  set.seed(i)
+  
+  # Initialize an empty feature set
+  current_features <- c()
+  
+  for (j in 1:length(microbes)) {
+    # Add one microbe at a time
+    current_features <- c(current_features, microbes[j])
+    
+    # Create subset with group and current microbes
+    microbe_data <- otutab_t[, c("group", current_features)] %>% as.data.frame()
+    
+    # Split into training and testing sets
+    train_index <- createDataPartition(microbe_data$group, p = 0.7, list = FALSE)
+    train_data <- microbe_data[train_index, ]
+    test_data <- microbe_data[-train_index, ]
+    train_data <- na.omit(train_data)
+    
+    # Build Random Forest model
+    temp_model <- randomForest(group ~ ., data = train_data, importance = TRUE, proximity = TRUE)
+    
+    # Calculate Out-Of-Bag (OOB) error rate
+    oob_error <- temp_model$err.rate[nrow(temp_model$err.rate), "OOB"]
+    
+    # Predict on test set
+    predicted <- predict(temp_model, newdata = test_data, type = "response")
+    prob <- predict(temp_model, newdata = test_data, type = "prob")[, 2]
+    
+    # Compute metrics: Accuracy, AUC, recall, precision, F1-score
+    accuracy <- mean(predicted == test_data$group)
+    
+    # Compute AUC
+    roc_obj <- roc(test_data$group, prob, levels = c("Disease", "Health"), direction = "<")
+    auc_value <- auc(roc_obj)
+    
+    # Compute confusion matrix metrics
+    cm <- confusionMatrix(predicted, test_data$group)
+    recall <- cm$byClass["Recall"]
+    precision <- cm$byClass["Precision"]
+    f1_score <- cm$byClass["F1"]
+    
+    # Extract Kappa value
+    kappa_value <- cm$overall["Kappa"]
+    
+    # Store results in dataframe
+    result_df <- rbind(result_df, data.frame(
+      Microbe_Count = j,
+      Microbes = paste(current_features, collapse = ", "),
+      Accuracy = accuracy,
+      AUC = auc_value,
+      Recall = recall,
+      Precision = precision,
+      F1_Score = f1_score,
+      OOB_Error = oob_error,
+      Kappa = kappa_value,
+      Run = i
+    ))
+  }
+}
+
+# Aggregate mean and standard deviation for each microbe combination
+summary_df <- result_df %>%
+  group_by(Microbe_Count, Microbes) %>%
+  summarise(
+    Accuracy_Mean = mean(Accuracy),
+    Accuracy_SD = sd(Accuracy),
+    AUC_Mean = mean(AUC),
+    AUC_SD = sd(AUC),
+    Recall_Mean = mean(Recall),
+    Recall_SD = sd(Recall),
+    Precision_Mean = mean(Precision),
+    Precision_SD = sd(Precision),
+    F1_Score_Mean = mean(F1_Score),
+    F1_Score_SD = sd(F1_Score),
+    OOB_Error_Mean = mean(OOB_Error),
+    OOB_Error_SD = sd(OOB_Error),
+    Kappa_Mean = mean(Kappa),
+    Kappa_SD = sd(Kappa)
+  )
+
+# Output summary results
+print(summary_df)
+
+# Assign weights for ranking
+weights <- c(Accuracy_Mean = 0.1, AUC_Mean = 0.3, Recall_Mean = 0.3, Precision_Mean = 0.1, F1_Score_Mean = 0.15, OOB_Error_Mean = 0.05, Kappa_Mean = 0.05,
+             Accuracy_SD = 0.1, AUC_SD = 0.3, Recall_SD = 0.3, Precision_SD = 0.1, F1_Score_SD = 0.15, OOB_Error_SD = 0.05, Kappa_SD = 0.05)
+
+# Replace NA values with zero
+summary_df[is.na(summary_df)] = 0
+
+result_df <- summary_df %>%
+  mutate(Overall_Score_SD = 
+           weights["Accuracy_SD"] * Accuracy_SD +
+           weights["AUC_SD"] * AUC_SD +
+           weights["Recall_SD"] * Recall_SD +
+           weights["Precision_SD"] * Precision_SD +
+           weights["F1_Score_SD"] * F1_Score_SD +
+           weights["OOB_Error_SD"] * (1 - OOB_Error_SD) +
+           weights["Kappa_SD"] * Kappa_SD) %>%
+  mutate(Overall_Score = 
+           weights["Accuracy_Mean"] * Accuracy_Mean +
+           weights["AUC_Mean"] * AUC_Mean +
+           weights["Recall_Mean"] * Recall_Mean +
+           weights["Precision_Mean"] * Precision_Mean +
+           weights["F1_Score_Mean"] * F1_Score_Mean +
+           weights["OOB_Error_Mean"] * (1 - OOB_Error_Mean) +
+           weights["Kappa_Mean"] * Kappa_Mean)
+
+# Sort by overall score
+result_df2 <- result_df %>% arrange(Microbe_Count) %>% 
+  select(Microbe_Count, Microbes, Overall_Score, Overall_Score_SD, everything())
+head(result_df2)
+
+result_df3 <- result_df2 %>%
+  mutate(Overall_Score_SD = weights["Accuracy_SD"] * Accuracy_SD +
+           weights["AUC_SD"] * AUC_SD +
+           weights["Recall_SD"] * Recall_SD +
+           weights["Precision_SD"] * Precision_SD +
+           weights["F1_Score_SD"] * F1_Score_SD +
+           weights["OOB_Error_SD"] * (1 - OOB_Error_SD) +
+           weights["Kappa_SD"] * Kappa_SD) %>% 
+  select(2, 3, 23, 24, 25)
+
+microbe_data <- result_df3 
+microbe_data_sorted <- microbe_data %>%
+  arrange(desc(Overall_Score))
+microbe_data_sorted$id <- 1:nrow(microbe_data_sorted)
+
+# Mark top 23 microbes with different colors
+top_n <- 23
+microbe_data_sorted$color_group <- ifelse(microbe_data_sorted$id <= top_n, "grey20", "grey60")
+
+#Fig.1E------
+x <- read_excel("./data.xlsx", sheet = 4)
+table(x$level)
+p = ggplot(x, aes(x=otu, y=neglogp, color=Phylum, size=logCPM, shape=level)) +
+  geom_point(alpha=.8) + 
+  geom_hline(yintercept=FDR, linetype=2, color="grey30") +
+  scale_shape_manual(values=c(17, 25, 20))+
+  scale_size(breaks=c(5, 10, 15)) +
+  # scale_color_manual(values = c(RColorBrewer::brewer.pal(9,"Set1")))+
+  scale_color_manual(values = c("#8ECFC9","#FFBE7A","#FA7F6F","#82B0D2","#2878b5","#9ac9db"))+
+  theme_classic()+
+  theme(axis.ticks.x=element_blank(),axis.text.x=element_blank(),legend.position="top") 
+
+
+#Fig.2B----
+da = read_xlsx("./data.xlsx",sheet = 6)
+da3 = pivot_longer(da,col=-ID2, 
+                   names_to = "id", 
+                   values_to = "anta")
+da3$ID2 <- factor(da3$ID2 ,levels = unique(da3$ID2 ))
+da3$id <- factor(da3$id ,levels = unique(da3$id ))
+da3 <- da3 %>% arrange(ID2)
+da3$abundance[da3$anta == 0] <- NA
+p = ggplot(da3,aes(ID2,id)) +
+  geom_point(aes(size = anta,color= anta,fill=anta), shape = 17) +
+   scale_size_continuous(range = c(3, 4)) +
+   scale_color_gradient(low = "#FDBF6F", high = colset2[6], na.value = NA)  +
+  theme_bw(base_size = 16) +
+  xlab('') + ylab('') +
+  theme(axis.text.x = element_text(angle = 45,hjust = 1)) 
+
+#Fig.2C----
+data<- read_xlsx("data.xlsx",sheet = 5)
+pd = position_dodge(0.5)
+data$Group
+
+p = ggplot(data, aes(x=day,y=Disease.index, colour=Group, group=Group))+
+  geom_errorbar(aes(ymin=Disease.index-Se, ymax=Disease.index+Se),
+                width=1, 
+                size=0.5, 
+                colour="black",
+                position=pd) +
+  geom_line(size=1, position=pd) +
+  geom_point(aes(color = Group),size=3, position=pd)+
+  scale_x_continuous(breaks = c(1,3,6,8,10,12,15,24,27,35))+
+  labs(x="Days after inocultaion",y="Disease incidence(%)")+
+  scale_fill_npg()+
+  scale_color_npg()+
+  theme_bw()+
+  theme(panel.grid.major = element_blank(),
+        panel.grid.minor = element_blank())
+p
+
+
+
+
+#Fig.3D----
+data<- read_xlsx("data.xlsx", sheet = "Fig.3D")
+data2 =  data %>% filter(plant ==  "pepper") %>%  select(ID,group,Disease.index)
+res = aovMcomper(data = data2 , i=3, method_Mc = "LSD")
+PlotresultBar = aovMuiBoxP1(data2 ,  i= 3,sig_show ="abc",result = res[[1]])
+PlotresultBar[[1]]+
+  scale_fill_npg()+
+  #scale_color_npg()+
+  theme_bw()+
+  theme(panel.grid.major = element_blank(),
+        panel.grid.minor = element_blank())+
+  theme(axis.text.x= element_text(size=13),
+        axis.text.y= element_text(size=13))+
+  theme(axis.text.x=element_text(angle=30,hjust = 1,vjust = 1,colour = "black"),
+        axis.text.y =element_text(colour = "black"))+
+  scale_x_discrete(limits = c("Control", "Sphi", "Micr", "Aeri","Stre","SynCom_III1","SynCom_III2","SynCom_III3",
+                              "SynCom_III4"))
+
+
+
+#Fig.4D----
+# Load necessary libraries
+library(readxl)    # For reading Excel files
+library(dplyr)     # For data manipulation
+library(ggplot2)   # For visualization
+library(ggrepel)   # For avoiding text overlap in plots
+# Read the data from Excel file (sheet: Fig.4D)
+data <- read_xlsx("data.xlsx", sheet = "Fig.4D")
+# Check unique class categories
+da5$class %>% unique()
+# Calculate the percentage of each class
+x2 = da5 %>% 
+  select(class) %>%
+  group_by(class) %>%
+  summarise(count = n()) %>%
+  mutate(percentage = count / sum(count) * 100,
+         label = paste0(round(percentage, 1), "%"))
+# Arrange by descending order of percentage
+x2 <- x2 %>%
+  arrange(desc(percentage)) %>%  
+  mutate(cum_percentage = cumsum(percentage),  # Cumulative percentage
+         mid_percentage = cum_percentage - percentage / 2,  # Mid-point for labels
+         label = paste0(round(percentage, 1), "%"))  # Create percentage labels
+
+# Create a solid pie chart with labels outside
+p = ggplot(x2, aes(x = 2, y = percentage, fill = reorder(class, percentage))) +
+  geom_bar(stat = "identity", width = 1, color = "black") +  # Create solid pie chart
+  xlim(1, 3) +  # Extend x-axis range for label display
+  coord_polar("y", start = 0) +  # Convert to polar coordinates
+  labs(fill = "Level", y = "Percentage", x = NULL) +  # Add labels
+  theme_void() +  # Remove background and axis lines
+  theme(legend.position = "right") +  # Position legend on the right
+  # Add connecting lines
+  geom_segment(aes(x = 2, xend = 2.5, 
+                   y = mid_percentage, yend = mid_percentage),
+               color = "black", size = 0.6) +
+  # Add class labels outside the chart
+  geom_text(aes(x = 2.6, y = mid_percentage, label = class),  
+            hjust = 0,  # Left align the text
+            size = 5) +  # Adjust font size
+  # Add percentage labels inside the chart
+  geom_text(aes(x = 2, y = mid_percentage, label = label), 
+            color = "black", size = 5) +  
+  # Customize fill colors with transparency
+  scale_fill_manual(values = scales::alpha(c(
+    "#1F78B4","#B2DF8A","#33A02C","#FB9A99" ,"#B15928","#FDBF6F" ,"#A6CEE3","#CAB2D6"
+  ), 0.75)) +
+  theme(legend.position = "none")
+
+# Select relevant columns from dataset
+
+# Ensure class levels match the ordered x2$class
+da5$class = factor(da5$class, levels = x2$class)
+
+# Select the top 3 metabolites per class based on log2 fold change
+df_top10 <- da5 %>%
+  group_by(class) %>%
+  top_n(3, wt = ck_rs_log2_FC) %>%
+  ungroup()
+
+# Check the class levels after filtering
+df_top10$class
+
+# Create a bubble plot with jitter to visualize metabolite differences
+ggplot(da5, aes(x = class, y = ck_rs_log2_FC, size = ck_rs_log2_FC, fill = class)) +
+  geom_point(shape = 21, color = "black", alpha = 0.7, 
+             position = position_jitter(width = 0.2, height = 0.3)) +  # Add jitter to reduce overlap
+  scale_size_continuous(range = c(1, 13)) +  # Adjust bubble size range
+  # Use geom_text_repel to reduce text overlap
+  geom_text_repel(data = df_top10, aes(label = Row.names), 
+                  size = 4, color = "black", 
+                  nudge_x = 0.25,  # Increase horizontal distance for labels
+                  direction = "y",  # Adjust label position along y-axis only
+                  box.padding = 0.4,  # Increase spacing around labels
+                  point.padding = 0.3,  # Increase distance between label and point
+                  max.overlaps = 20,  # Allow higher overlap limit to avoid omitting labels
+                  segment.size = 0.4,  # Adjust connecting line thickness
+                  segment.color = "grey50") + 
+  # Customize fill colors
+  scale_fill_manual(values = c(
+    "#A6CEE3", "#FDBF6F" ,"#B15928","#FB9A99" ,
+    "#33A02C", "#B2DF8A", "#1F78B4" ,"#CAB2D6")) +  
+  theme_bw() +  # Apply a clean theme
+  theme(panel.grid.major = element_blank(),
+        panel.grid.minor = element_blank(),
+        axis.text.x = element_text(angle = 45, hjust = 1))  # Rotate x-axis labels for readability
+
+# data.process
+ps_ms <- readRDS("./data/ps_ms.rds") %>% scale_micro()
+# Display the first few rows of the taxonomy table
+tax_table(ps_ms) %>% head()
+# Subset samples for groups "ck" (control) and "rs" (treated)
+ps_ms2 <- ps_ms %>% subset_samples(Group %in% c("ck", "rs"))
+
+# Extract metadata from sample data
+metadata <- sample_data(ps_ms2) %>% as.data.frame()
+
+# Extract OTU table (metabolite abundance matrix) and convert it to a dataframe
+otu_df <- as.data.frame(otu_table(ps_ms2))
+
+# **Ensure correct data format**
+# Convert OTU table: rows as metabolites, columns as samples
+otu_df$Metabolite <- rownames(otu_df)  # Store metabolite names in a new column
+otu_long <- otu_df %>%
+  pivot_longer(cols = -Metabolite, names_to = "Sample", values_to = "Abundance")
+
+# Merge metadata with metabolite data
+otu_long <- left_join(otu_long, metadata, by = c("Sample" = "ID"))
+
+# Ensure "Group" is a factor with the correct order
+otu_long$Group <- factor(otu_long$Group, levels = c("ck", "rs"))
+
+# **GLM-based negative binomial regression analysis**
+results <- data.frame(Metabolite = unique(otu_long$Metabolite),
+                      p_value = NA, logFC = NA)
+
+for (met in unique(otu_long$Metabolite)) {
+  sub_data <- otu_long %>% filter(Metabolite == met)
+  
+  # Fit a generalized linear model (GLM) with negative binomial distribution
+  fit <- glm(Abundance ~ Group, data = sub_data)
+  
+  # Extract p-value
+  p_value <- summary(fit)$coefficients["Grouprs", "Pr(>|t|)"]
+  
+  # Compute Log2 Fold Change (Log FC)
+  ck <- mean(sub_data$Abundance[sub_data$Group == "ck"])
+  rs <- mean(sub_data$Abundance[sub_data$Group == "rs"])
+  ck_rs_log2_FC <- log2(ck / rs)
+  
+  # Store results
+  results[results$Metabolite == met, "p_value"] <- p_value
+  results[results$Metabolite == met, "ck_rs_log2_FC"] <- ck_rs_log2_FC
+}
+
+# Multiple testing correction (FDR adjustment)
+results$ck_rs_fdr <- p.adjust(results$p_value, method = "BH")
+
+
+
+#Fig.4F-----
+dat =  read.xlsx("./data.xlsx",sheet = "Fig.4F.1")
+data = dat 
+data_long <- data %>%
+  pivot_longer(cols = -c(id, Con), names_to = "Metabolite", values_to = "Value")
+
+data_long = data_long 
+data_summary <- data_long %>%
+  group_by(Con, Metabolite) %>%
+  summarise(
+    mean_value = mean(Value),
+    se = sd(Value) / sqrt(n()),  
+    .groups = "drop"
+  )
+
+desired_order <- c("Ism","3-Hydroxybutyric.acid", "Adenine","Glutamate","Phenylalanine","Succinate","Sucrose",  "Trehalose",
+                   "Valine", "Xanthine", "Mix" , "Sym","NB")
+
+data_long$Metabolite <- factor(data_long$Metabolite, levels = desired_order)
+
+data_summary$Metabolite <- factor(data_summary$Metabolite, levels = desired_order)
+p1= ggplot(data_summary, aes(x = Con, y = mean_value, color = Metabolite, group = Metabolite)) +
+  geom_line(size = 1,alpha = 0.5) +                          
+  geom_point(size = 2,alpha = 0.5) +                         
+  geom_errorbar(aes(ymin = mean_value - se, ymax = mean_value + se), 
+                width = 0.2) +
+  # Mean line as black
+  facet_wrap(~ Metabolite, scales = "free_y", nrow = 1) +
+  labs(title = "Metabolite Concentrations by Con Group",
+       x = "",
+       y = "OD 600") +
+  theme_minimal()+
+  theme(axis.ticks = element_blank(),
+        axis.text.x = element_blank(),
+        legend.position = "none"
+  )+
+  scale_y_continuous(labels = scales::number_format(accuracy = 0.01))
+
+data_long =  read.xlsx("./data.xlsx",sheet ="Fig.4F.2")
+
+colnames(data_long) =  c("Value" ,"Con" ,"Metabolite", "id")
+data_summary <- data_long %>%
+  group_by(Con, Metabolite) %>%
+  summarise(
+    mean_value = mean(Value),
+    se = sd(Value) / sqrt(n()),  
+    .groups = "drop"
+  )
+
+desired_order <- c("Ism","3-Hydroxybutyric.acid", "Adenine","Glutamate","Phenylalanine","Succinate","Sucrose",  "Trehalose",
+                   "Valine", "Xanthine", "Mix" , "Sym","NB")
+
+data_summary$Metabolite <- factor(data_summary$Metabolite, levels = desired_order)
+
+
+p2 = ggplot(data_summary, aes(x = Con, y = mean_value, color = Metabolite, group = Metabolite)) +
+  geom_line(size = 1,alpha = 0.5) +                         
+  geom_point(size = 2,alpha = 0.5) +                         
+  geom_errorbar(aes(ymin = mean_value - se, ymax = mean_value + se),
+                width = 0.2) +
+  # Mean line as black
+  facet_wrap(~ Metabolite, scales = "free_y", nrow = 1) +
+  labs(title = "Metabolite Concentrations by Con Group",
+       x = "",
+       y = "0.3") +
+  theme_minimal()+
+  theme(axis.ticks = element_blank(),
+        axis.text.x = element_blank(),
+        legend.position = "none"
+  )+
+  scale_y_continuous(labels = scales::number_format(accuracy = 0.01))
+# scale_color_brewer(palette = "Set1")
+p2
+
+dat =  read.xlsx("./data.xlsx",sheet ="Fig.4F.3")
+data = dat 
+# Reshape data to long format
+
+data_long <- data %>%
+  pivot_longer(cols = -c(id, Con), names_to = "Metabolite", values_to = "Value")
+
+head(data_long)
+data_long = data_long 
+data_summary <- data_long %>%
+  group_by(Con, Metabolite) %>%
+  summarise(
+    mean_value = mean(Value),
+    se = sd(Value) / sqrt(n()),  
+    .groups = "drop"
+  )
+
+desired_order <- c("Ism","3-Hydroxybutyric.acid", "Adenine","Glutamate","Phenylalanine","Succinate","Sucrose",  "Trehalose",
+                   "Valine", "Xanthine", "Mix" , "Sym","NB")
+
+
+data_long$Metabolite <- factor(data_long$Metabolite, levels = desired_order)
+data_summary$Metabolite <- factor(data_summary$Metabolite, levels = desired_order)
+
+p3 = ggplot(data_summary, aes(x = Con, y = mean_value, color = Metabolite, group = Metabolite)) +
+  geom_line(size = 1,alpha = 0.5) +                         
+  geom_point(size = 2,alpha = 0.5) +                         
+  geom_errorbar(aes(ymin = mean_value - se, ymax = mean_value + se), 
+                width = 0.2) +
+  # Mean line as black
+  facet_wrap(~ Metabolite, scales = "free_y", nrow = 1) +
+  labs(title = "Metabolite Concentrations by Con Group",
+       x = "",
+       y = "OD 595") +
+  theme_minimal()+
+  theme(axis.ticks = element_blank(),
+        axis.text.x = element_blank(),
+        legend.position = "none"
+  )+
+  scale_y_continuous(labels = scales::number_format(accuracy = 0.01))
+# scale_color_brewer(palette = "Set1")
+
+
+data_long =  read.xlsx("./data.xlsx",sheet ="Fig.4F.4")
+
+colnames(data_long) =  c("Value" ,"Con" ,"Metabolite", "id")
+data_summary <- data_long %>%
+  group_by(Con, Metabolite) %>%
+  summarise(
+    mean_value = mean(Value),
+    se = sd(Value) / sqrt(n()),  
+    .groups = "drop"
+  )
+desired_order <- c("Ism","3-Hydroxybutyric.acid", "Adenine","Glutamate","Phenylalanine","Succinate","Sucrose",  "Trehalose",
+                   "Valine", "Xanthine", "Mix" , "Sym","NB")
+
+
+data_summary$Metabolite <- factor(data_summary$Metabolite, levels = desired_order)
+
+
+p4= ggplot(data_summary, aes(x = Con, y = mean_value, color = Metabolite, group = Metabolite)) +
+  geom_line(size = 1,alpha = 0.5) +                          
+  geom_point(size = 2,alpha = 0.5) +                         
+  geom_errorbar(aes(ymin = mean_value - se, ymax = mean_value + se), 
+                width = 0.2) +
+  # Mean line as black
+  facet_wrap(~ Metabolite, scales = "free_y", nrow = 1) +
+  labs(title = "Metabolite Concentrations by Con Group",
+       x = "",
+       y = "CMC") +
+  theme_minimal()+
+  theme(axis.ticks = element_blank(),
+        axis.text.x = element_blank(),
+        legend.position = "none"
+  )+
+  scale_y_continuous(labels = scales::number_format(accuracy = 0.01))
+# scale_color_brewer(palette = "Set1")
+p4
+
+# 0.7
+data_long =  read.xlsx("./data.xlsx",sheet ="Fig.4F.5")
+
+head(data_long)
+data_long = data_long 
+colnames(data_long) =  c("Value" ,"Con" ,"Metabolite", "id")
+data_summary <- data_long %>%
+  group_by(Con, Metabolite) %>%
+  summarise(
+    mean_value = mean(Value),
+    se = sd(Value) / sqrt(n()),  
+    .groups = "drop"
+  )
+
+desired_order <- c("Ism","3-Hydroxybutyric.acid", "Adenine","Glutamate","Phenylalanine","Succinate","Sucrose",  "Trehalose",
+                   "Valine", "Xanthine", "Mix" , "Sym","NB")
+
+data_summary$Metabolite <- factor(data_summary$Metabolite, levels = desired_order)
+
+p5= ggplot(data_summary, aes(x = Con, y = mean_value, color = Metabolite, group = Metabolite)) +
+  geom_line(size = 1,alpha = 0.5) +                       
+  geom_point(size = 2,alpha = 0.5) +                        
+  geom_errorbar(aes(ymin = mean_value - se, ymax = mean_value + se), 
+                width = 0.2) +
+  # Mean line as black
+  facet_wrap(~ Metabolite, scales = "free_y", nrow = 1) +
+  labs(title = "Metabolite Concentrations by Con Group",
+       x = "",
+       y = "0.7") +
+  theme_minimal()+
+  theme(axis.ticks = element_blank(),
+        axis.text.x = element_blank(),
+        legend.position = "none"
+  )+
+  scale_y_continuous(labels = scales::number_format(accuracy = 0.01))
+# scale_color_brewer(palette = "Set1")
+p5
+library(patchwork)
+combined_plot <- p1 / p2 / p3 / p4/ p5
